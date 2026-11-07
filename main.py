@@ -5,9 +5,7 @@ from threading import Thread
 
 import serial
 import serial.tools.list_ports
-import pydirectinput  # PyDirectInput 
-
-pydirectinput.PAUSE = 0
+import vgamepad as vg # <-- AGGIUNTO VGAMEPAD
 
 parser = argparse.ArgumentParser(description='DJI Mavic 3 RC231, RC-N1)')
 parser.add_argument('-p', '--port', help='RC Serial Port', default="COM9")
@@ -74,7 +72,7 @@ def calc_checksum(packet, plength):
         0xf78f, 0xe606, 0xd49d, 0xc514, 0xb1ab, 0xa022, 0x92b9, 0x8330,
         0x7bc7, 0x6a4e, 0x58d5, 0x495c, 0x3de3, 0x2c6a, 0x1ef1, 0x0f78
     ]
-    v = 0x3692  # DJI P3/P4/Mavic Seed
+    v = 0x3692
     for i in range(plength):
         vv = v >> 8
         v = vv ^ crc[((packet[i] ^ v) & 0xFF)]
@@ -150,82 +148,36 @@ def parseInput(input_bytes, name):
     output = (int.from_bytes(input_bytes, byteorder='little') - 1024) * 2 * 4096 // 165
     if output >= 32768:
         output = 32767
+    if output <= -32768:
+        output = -32768
     return output
 
 st = {"rh": 0, "rv": 0, "lh": 0, "lv": 0}
 
 # ------------------------------------------------------------------
-# Input update thread using PyDirectInput
+# CREAZIONE GAMEPAD VIRTUALE
 # ------------------------------------------------------------------
+print("Inizializzazione Gamepad Virtuale...")
+gamepad = vg.VX360Gamepad()
+
 def input_update_thread():
-    deadzone_keyboard = 5000
-    deadzone_mouse = 10000
-    mouse_sensitivity = 0.000043  # 필요에 따라 조절
-
-    pressed_keys = {'w': False, 'a': False, 's': False, 'd': False}
-    
     while True:
-
-        if st["lv"] > deadzone_keyboard:
-            if not pressed_keys['w']:
-                pydirectinput.keyDown('w')
-                pressed_keys['w'] = True
-        else:
-            if pressed_keys['w']:
-                pydirectinput.keyUp('w')
-                pressed_keys['w'] = False
+        # Aggiorna gli stick del gamepad virtuale (valori da -32768 a 32767)
+        gamepad.left_joystick(x_value=st["lh"], y_value=st["lv"])
+        gamepad.right_joystick(x_value=st["rh"], y_value=st["rv"])
+        gamepad.update() # Invia i dati a Windows
         
-        if st["lv"] < -deadzone_keyboard:
-            if not pressed_keys['s']:
-                pydirectinput.keyDown('s')
-                pressed_keys['s'] = True
-        else:
-            if pressed_keys['s']:
-                pydirectinput.keyUp('s')
-                pressed_keys['s'] = False
-
-        if st["lh"] > deadzone_keyboard:
-            if not pressed_keys['d']:
-                pydirectinput.keyDown('d')
-                pressed_keys['d'] = True
-        else:
-            if pressed_keys['d']:
-                pydirectinput.keyUp('d')
-                pressed_keys['d'] = False
-
-        if st["lh"] < -deadzone_keyboard:
-            if not pressed_keys['a']:
-                pydirectinput.keyDown('a')
-                pressed_keys['a'] = True
-        else:
-            if pressed_keys['a']:
-                pydirectinput.keyUp('a')
-                pressed_keys['a'] = False
-
-        move_x = 0
-        move_y = 0
-        if abs(st["rh"]) > deadzone_mouse:
-            move_x = int(st["rh"] * mouse_sensitivity)
-        if abs(st["rv"]) > deadzone_mouse:
-            move_y = -int(st["rv"] * mouse_sensitivity)
-        if move_x != 0 or move_y != 0:
-            pydirectinput.moveRel(move_x, move_y)
-        
-        print(f"[Input Thread] Parsed - RH: {st['rh']}, RV: {st['rv']}, LH: {st['lh']}, LV: {st['lv']}")
-        time.sleep(0.001)
+        time.sleep(0.005) # 5ms per non saturare la CPU
 
 thread = Thread(target=input_update_thread, args=())
 thread.daemon = True
 thread.start()
 
 try:
- 
     send_duml(s, 0x0a, 0x06, 0x40, 0x06, 0x24, bytearray.fromhex('01'))
     
     while True:
-
         send_duml(s, 0x0a, 0x06, 0x40, 0x06, 0x01, bytearray.fromhex(''))
-
         buffer = bytearray()
         while True:
             b = s.read(1)
@@ -244,19 +196,13 @@ try:
                 break
         
         data = buffer
-        if data:
-            hex_str = ' '.join(format(x, '02x') for x in data)
-            print(f"[Serial Debug] Raw Data Packet: {hex_str}")
         
         if len(data) == 38:
             st["rh"] = parseInput(data[13:15], 'lv')
             st["rv"] = parseInput(data[16:18], 'lh')
             st["lv"] = parseInput(data[19:21], 'rv')
             st["lh"] = parseInput(data[22:24], 'rh')
-            print(f"[Serial Debug] Parsed Joystick Values - RH: {st['rh']}, RV: {st['rv']}, LH: {st['lh']}, LV: {st['lv']}")
-        else:
-            if data:
-                print(f"[Serial Debug] Received packet length: {len(data)} (expected 38)")
+
 except serial.SerialException as e:
     print('\n\nCould not read/write:', e)
 except KeyboardInterrupt:
