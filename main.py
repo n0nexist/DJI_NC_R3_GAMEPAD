@@ -2,41 +2,48 @@ import argparse
 import struct
 import time
 from threading import Thread
+import ctypes
 
 import serial
 import serial.tools.list_ports
-import vgamepad as vg # <-- AGGIUNTO VGAMEPAD
+import vgamepad as vg
 
-parser = argparse.ArgumentParser(description='DJI Mavic 3 RC231, RC-N1)')
+# --- OTTIMIZZAZIONE WINDOWS TIMER ---
+# Forza Windows ad usare un timer di sistema a 1ms (invece dei classici 15.6ms)
+# Questo abbatte drasticamente l'input lag.
+try:
+    winmm = ctypes.WinDLL('winmm')
+    winmm.timeBeginPeriod(1)
+except Exception:
+    pass # Se non è Windows, ignora
+
+parser = argparse.ArgumentParser(description='DJI RC231 (RC-N1/RC-N2/RC-N3) to Xbox Gamepad')
 parser.add_argument('-p', '--port', help='RC Serial Port', default="COM9")
 args = parser.parse_args()
 
+# --- CONNESSIONE SERIALE ---
 try:
     s = None
     ports = serial.tools.list_ports.comports(True)
     for port in ports:
-        try:
-            print(port.description)
-            if "For Protocol" in port.description:
-                print("found DJI USB VCOM For Protocol")
-                s = serial.Serial(port=port.name, baudrate=115200)
-                print('Opened serial port:', s.name)
-                break
-            else:
-                print("skip")
-        except (OSError, serial.SerialException):
-            pass
+        if "For Protocol" in port.description:
+            print("Trovata porta DJI USB VCOM For Protocol")
+            # timeout=0 rende la lettura NON bloccante
+            s = serial.Serial(port=port.name, baudrate=115200, timeout=0)
+            print('Porta seriale aperta:', s.name)
+            break
     if s is None:
-        print("DJI RC No serial port found.")
+        print("Nessuna porta seriale DJI trovata. Assicurati che il radiocomando sia acceso e collegato alla porta USB inferiore.")
         exit(1)
 except serial.SerialException as e:
-    print('Could not open serial port:', e)
+    print('Impossibile aprire la porta seriale:', e)
     exit(1)
 
-print('app version: 3.0.0\n')
-print('\nDJI RC231 emulation started...\n')
-print('\nClose terminal to stop\n')
+print('app version: 3.2.0 (Low Latency & Fixed Overflow)\n')
+print('Emulazione DJI RC231 avviata...\n')
+print('Chiudi il terminale per fermare\n')
 
+# --- FUNZIONI DI CHECKSUM DJI ---
 def calc_checksum(packet, plength):
     crc = [
         0x0000, 0x1189, 0x2312, 0x329b, 0x4624, 0x57ad, 0x6536, 0x74bf,
@@ -80,71 +87,71 @@ def calc_checksum(packet, plength):
 
 def calc_pkt55_hdr_checksum(seed, packet, plength):
     arr_2A103 = [
-        0x00, 0x5E, 0xBC, 0xE2, 0x61, 0x3F, 0xDD, 0x83,
-        0xC2, 0x9C, 0x7E, 0x20, 0xA3, 0xFD, 0x1F, 0x41,
-        0x9D, 0xC3, 0x21, 0x7F, 0xFC, 0xA2, 0x40, 0x1E,
-        0x5F, 0x01, 0xE3, 0xBD, 0x3E, 0x60, 0x82, 0xDC,
-        0x23, 0x7D, 0x9F, 0xC1, 0x42, 0x1C, 0xFE, 0xA0,
-        0xE1, 0xBF, 0x5D, 0x03, 0x80, 0xDE, 0x3C, 0x62,
-        0xBE, 0xE0, 0x02, 0x5C, 0xDF, 0x81, 0x63, 0x3D,
-        0x7C, 0x22, 0xC0, 0x9E, 0x1D, 0x43, 0xA1, 0xFF,
-        0x46, 0x18, 0xFA, 0xA4, 0x27, 0x79, 0x9B, 0xC5,
-        0x84, 0xDA, 0x38, 0x66, 0xE5, 0xBB, 0x59, 0x07,
-        0xDB, 0x85, 0x67, 0x39, 0xBA, 0xE4, 0x06, 0x58,
-        0x19, 0x47, 0xA5, 0xFB, 0x78, 0x26, 0xC4, 0x9A,
-        0x65, 0x3B, 0xD9, 0x87, 0x04, 0x5A, 0xB8, 0xE6,
-        0xA7, 0xF9, 0x1B, 0x45, 0xC6, 0x98, 0x7A, 0x24,
-        0xF8, 0xA6, 0x44, 0x1A, 0x99, 0xC7, 0x25, 0x7B,
-        0x3A, 0x64, 0x86, 0xD8, 0x5B, 0x05, 0xE7, 0xB9,
-        0x8C, 0xD2, 0x30, 0x6E, 0xED, 0xB3, 0x51, 0x0F,
-        0x4E, 0x10, 0xF2, 0xAC, 0x2F, 0x71, 0x93, 0xCD,
-        0x11, 0x4F, 0xAD, 0xF3, 0x70, 0x2E, 0xCC, 0x92,
-        0xD3, 0x8D, 0x6F, 0x31, 0xB2, 0xEC, 0x0E, 0x50,
-        0xAF, 0xF1, 0x13, 0x4D, 0xCE, 0x90, 0x72, 0x2C,
-        0x6D, 0x33, 0xD1, 0x8F, 0x0C, 0x52, 0xB0, 0xEE,
-        0x32, 0x6C, 0x8E, 0xD0, 0x53, 0x0D, 0xEF, 0xB1,
-        0xF0, 0xAE, 0x4C, 0x12, 0x91, 0xCF, 0x2D, 0x73,
-        0xCA, 0x94, 0x76, 0x28, 0xAB, 0xF5, 0x17, 0x49,
-        0x08, 0x56, 0xB4, 0xEA, 0x69, 0x37, 0xD5, 0x8B,
-        0x57, 0x09, 0xEB, 0xB5, 0x36, 0x68, 0x8A, 0xD4,
-        0x95, 0xCB, 0x29, 0x77, 0xF4, 0xAA, 0x48, 0x16,
-        0xE9, 0xB7, 0x55, 0x0B, 0x88, 0xD6, 0x34, 0x6A,
-        0x2B, 0x75, 0x97, 0xC9, 0x4A, 0x14, 0xF6, 0xA8,
-        0x74, 0x2A, 0xC8, 0x96, 0x15, 0x4B, 0xA9, 0xF7,
-        0xB6, 0xE8, 0x0A, 0x54, 0xD7, 0x89, 0x6B, 0x35
+        0x00, 0x5E, 0xBC, 0xE2, 0x61, 0x3F, 0xDD, 0x83, 0xC2, 0x9C, 0x7E, 0x20, 0xA3, 0xFD, 0x1F, 0x41,
+        0x9D, 0xC3, 0x21, 0x7F, 0xFC, 0xA2, 0x40, 0x1E, 0x5F, 0x01, 0xE3, 0xBD, 0x3E, 0x60, 0x82, 0xDC,
+        0x23, 0x7D, 0x9F, 0xC1, 0x42, 0x1C, 0xFE, 0xA0, 0xE1, 0xBF, 0x5D, 0x03, 0x80, 0xDE, 0x3C, 0x62,
+        0xBE, 0xE0, 0x02, 0x5C, 0xDF, 0x81, 0x63, 0x3D, 0x7C, 0x22, 0xC0, 0x9E, 0x1D, 0x43, 0xA1, 0xFF,
+        0x46, 0x18, 0xFA, 0xA4, 0x27, 0x79, 0x9B, 0xC5, 0x84, 0xDA, 0x38, 0x66, 0xE5, 0xBB, 0x59, 0x07,
+        0xDB, 0x85, 0x67, 0x39, 0xBA, 0xE4, 0x06, 0x58, 0x19, 0x47, 0xA5, 0xFB, 0x78, 0x26, 0xC4, 0x9A,
+        0x65, 0x3B, 0xD9, 0x87, 0x04, 0x5A, 0xB8, 0xE6, 0xA7, 0xF9, 0x1B, 0x45, 0xC6, 0x98, 0x7A, 0x24,
+        0xF8, 0xA6, 0x44, 0x1A, 0x99, 0xC7, 0x25, 0x7B, 0x3A, 0x64, 0x86, 0xD8, 0x5B, 0x05, 0xE7, 0xB9,
+        0x8C, 0xD2, 0x30, 0x6E, 0xED, 0xB3, 0x51, 0x0F, 0x4E, 0x10, 0xF2, 0xAC, 0x2F, 0x71, 0x93, 0xCD,
+        0x11, 0x4F, 0xAD, 0xF3, 0x70, 0x2E, 0xCC, 0x92, 0xD3, 0x8D, 0x6F, 0x31, 0xB2, 0xEC, 0x0E, 0x50,
+        0xAF, 0xF1, 0x13, 0x4D, 0xCE, 0x90, 0x72, 0x2C, 0x6D, 0x33, 0xD1, 0x8F, 0x0C, 0x52, 0xB0, 0xEE,
+        0x32, 0x6C, 0x8E, 0xD0, 0x53, 0x0D, 0xEF, 0xB1, 0xF0, 0xAE, 0x4C, 0x12, 0x91, 0xCF, 0x2D, 0x73,
+        0xCA, 0x94, 0x76, 0x28, 0xAB, 0xF5, 0x17, 0x49, 0x08, 0x56, 0xB4, 0xEA, 0x69, 0x37, 0xD5, 0x8B,
+        0x57, 0x09, 0xEB, 0xB5, 0x36, 0x68, 0x8A, 0xD4, 0x95, 0xCB, 0x29, 0x77, 0xF4, 0xAA, 0x48, 0x16,
+        0xE9, 0xB7, 0x55, 0x0B, 0x88, 0xD6, 0x34, 0x6A, 0x2B, 0x75, 0x97, 0xC9, 0x4A, 0x14, 0xF6, 0xA8,
+        0x74, 0x2A, 0xC8, 0x96, 0x15, 0x4B, 0xA9, 0xF7, 0xB6, 0xE8, 0x0A, 0x54, 0xD7, 0x89, 0x6B, 0x35
     ]
     chksum = seed
     for i in range(plength):
         chksum = arr_2A103[((packet[i] ^ chksum) & 0xFF)]
     return chksum
 
+# Sequence number Globale (Gestito a 16-bit)
+GLOBAL_SEQ_NUM = 0x34eb
+
 def send_duml(s, source, target, cmd_type, cmd_set, cmd_id, payload=None):
-    sequence_number = 0x34eb
+    global GLOBAL_SEQ_NUM
     packet = bytearray.fromhex('55')
     length = 13
     if payload is not None:
         length += len(payload)
     if length > 0x3ff:
         print("Packet too large")
-        exit(1)
+        return
+        
     packet += struct.pack('B', length & 0xff)
     packet += struct.pack('B', (length >> 8) | 0x4)
     hdr_crc = calc_pkt55_hdr_checksum(0x77, packet, 3)
     packet += struct.pack('B', hdr_crc)
     packet += struct.pack('B', source)
     packet += struct.pack('B', target)
-    packet += struct.pack('<H', sequence_number)
+    
+    # FIX: Maschera a 16-bit per evitare struct.error
+    packet += struct.pack('<H', GLOBAL_SEQ_NUM & 0xFFFF)
+    
     packet += struct.pack('B', cmd_type)
     packet += struct.pack('B', cmd_set)
     packet += struct.pack('B', cmd_id)
+    
     if payload is not None:
         packet += payload
+        
     crc = calc_checksum(packet, len(packet))
     packet += struct.pack('<H', crc)
-    s.write(packet)
-    sequence_number += 1
+    
+    try:
+        s.write(packet)
+    except serial.SerialException:
+        pass # Evita crash se la porta si blocca per un millisecondo
+        
+    # FIX: Avvolge il contatore a 0 dopo 65535
+    GLOBAL_SEQ_NUM = (GLOBAL_SEQ_NUM + 1) & 0xFFFF
 
 def parseInput(input_bytes, name):
+    # Converte i valori grezzi dello stick (1024-2048) in range Xbox (-32768 a 32767)
     output = (int.from_bytes(input_bytes, byteorder='little') - 1024) * 2 * 4096 // 165
     if output >= 32768:
         output = 32767
@@ -152,60 +159,81 @@ def parseInput(input_bytes, name):
         output = -32768
     return output
 
+# Stato corrente degli stick
 st = {"rh": 0, "rv": 0, "lh": 0, "lv": 0}
 
-# ------------------------------------------------------------------
-# CREAZIONE GAMEPAD VIRTUALE
-# ------------------------------------------------------------------
+# --- CREAZIONE GAMEPAD VIRTUALE ---
 print("Inizializzazione Gamepad Virtuale...")
-gamepad = vg.VX360Gamepad()
+try:
+    gamepad = vg.VX360Gamepad()
+except Exception as e:
+    print(f"ERRORE: Impossibile creare il gamepad. Hai installato ViGEmBus e aperto il terminale come Amministratore?\nDettagli: {e}")
+    exit(1)
 
 def input_update_thread():
+    last_st = st.copy()
     while True:
-        # Aggiorna gli stick del gamepad virtuale (valori da -32768 a 32767)
-        gamepad.left_joystick(x_value=st["lh"], y_value=st["lv"])
-        gamepad.right_joystick(x_value=st["rh"], y_value=st["rv"])
-        gamepad.update() # Invia i dati a Windows
-        
-        time.sleep(0.005) # 5ms per non saturare la CPU
+        # Aggiorna il gamepad SOLO se i valori sono cambiati (Meno lag USB)
+        if st != last_st:
+            gamepad.left_joystick(x_value=st["lh"], y_value=st["lv"])
+            gamepad.right_joystick(x_value=st["rh"], y_value=st["rv"])
+            gamepad.update()
+            last_st = st.copy()
+        # 1ms è il massimo consentito dal timer di Windows
+        time.sleep(0.001)
 
 thread = Thread(target=input_update_thread, args=())
 thread.daemon = True
 thread.start()
 
+buffer = bytearray()
+
+# --- LOOP PRINCIPALE ---
 try:
+    # Invia il comando di inizializzazione al drone
     send_duml(s, 0x0a, 0x06, 0x40, 0x06, 0x24, bytearray.fromhex('01'))
     
     while True:
+        # Invia il ping di richiesta dati
         send_duml(s, 0x0a, 0x06, 0x40, 0x06, 0x01, bytearray.fromhex(''))
-        buffer = bytearray()
-        while True:
-            b = s.read(1)
-            if b == bytearray.fromhex('55'):  
-                buffer.extend(b)
-                ph = s.read(2)
-                buffer.extend(ph)
-                ph_val = struct.unpack('<H', ph)[0]
-                pl = ph_val & 0x03FF  
-                h_crc = s.read(1)    
-                buffer.extend(h_crc)
-                pd = s.read(pl - 4)
-                buffer.extend(pd)
-                break
+        
+        # Legge TUTTI i byte attualmente in attesa (Non bloccante)
+        if s.in_waiting > 0:
+            buffer.extend(s.read(s.in_waiting))
+            
+        # Elabora il buffer finché non ci sono più pacchetti completi
+        while len(buffer) >= 4:
+            if buffer[0] == 0x55: # Header DJI
+                ph_val = struct.unpack('<H', buffer[1:3])[0]
+                pl = ph_val & 0x03FF # Lunghezza del pacchetto
+                
+                # Se il buffer contiene il pacchetto completo
+                if len(buffer) >= pl:
+                    packet = buffer[:pl]
+                    buffer = buffer[pl:] # Rimuove il pacchetto processato
+                    
+                    if len(packet) == 38:
+                        st["rh"] = parseInput(packet[13:15], 'lv')
+                        st["rv"] = parseInput(packet[16:18], 'lh')
+                        st["lv"] = parseInput(packet[19:21], 'rv')
+                        st["lh"] = parseInput(packet[22:24], 'rh')
+                else:
+                    break # Aspetta che arrivino i byte mancanti
             else:
-                break
-        
-        data = buffer
-        
-        if len(data) == 38:
-            st["rh"] = parseInput(data[13:15], 'lv')
-            st["rv"] = parseInput(data[16:18], 'lh')
-            st["lv"] = parseInput(data[19:21], 'rv')
-            st["lh"] = parseInput(data[22:24], 'rh')
+                buffer.pop(0) # Scarta spazzatura e cerca il prossimo 0x55
+
+        # Cede il controllo alla CPU per un istante infinitesimale
+        time.sleep(0)
 
 except serial.SerialException as e:
-    print('\n\nCould not read/write:', e)
+    print('\n\nErrore di comunicazione seriale:', e)
 except KeyboardInterrupt:
-    print('\n\nDetected keyboard interrupt.')
+    print('\n\nInterruzione da tastiera rilevata.')
+finally:
+    # Ripristina il timer di Windows alla normalità
+    try:
+        winmm.timeEndPeriod(1)
+    except Exception:
+        pass
 
-print('Stopping.')
+print('Arresto in corso...')
